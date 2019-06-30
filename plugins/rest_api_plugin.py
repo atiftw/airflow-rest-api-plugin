@@ -1,21 +1,21 @@
 __author__ = 'robertsanders'
 __version__ = "1.0.7"
 
+import logging
+import os
+import socket
+import subprocess
+from datetime import datetime
+
+import airflow
+from airflow import configuration
 from airflow.models import DagBag, DagModel
 from airflow.plugins_manager import AirflowPlugin
 from airflow import configuration
 from airflow.www.app import csrf
 
 from flask import Blueprint, request, jsonify
-from flask_admin import BaseView, expose
-from flask_login import current_user
-
-from datetime import datetime
-import airflow
-import logging
-import subprocess
-import os
-import socket
+from flask_appbuilder import expose, BaseView as AppBuilderBaseView, has_access
 
 """
 CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org/cli.html
@@ -25,7 +25,7 @@ CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org
 
 # Location of the REST Endpoint
 # Note: Changing this will only effect where the messages are posted to on the web interface and will not change where the endpoint actually resides
-rest_api_endpoint = "/admin/rest_api/api"
+rest_api_endpoint = "/api/rest_plugin_api/api"
 
 # Getting Versions and Global variables
 hostname = socket.gethostname()
@@ -39,7 +39,8 @@ airflow_dags_folder = configuration.get('core', 'DAGS_FOLDER')
 log_loading = configuration.getboolean("rest_api_plugin", "LOG_LOADING") if configuration.has_option("rest_api_plugin", "LOG_LOADING") else False
 filter_loading_messages_in_cli_response = configuration.getboolean("rest_api_plugin", "FILTER_LOADING_MESSAGES_IN_CLI_RESPONSE") if configuration.has_option("rest_api_plugin", "FILTER_LOADING_MESSAGES_IN_CLI_RESPONSE") else True
 airflow_rest_api_plugin_http_token_header_name = configuration.get("rest_api_plugin", "REST_API_PLUGIN_HTTP_TOKEN_HEADER_NAME") if configuration.has_option("rest_api_plugin", "REST_API_PLUGIN_HTTP_TOKEN_HEADER_NAME") else "rest_api_plugin_http_token"
-airflow_expected_http_token = configuration.get("rest_api_plugin", "REST_API_PLUGIN_EXPECTED_HTTP_TOKEN") if configuration.has_option("rest_api_plugin", "REST_API_PLUGIN_EXPECTED_HTTP_TOKEN") else None
+token = configuration.get("rest_api_plugin", "REST_API_PLUGIN_EXPECTED_HTTP_TOKEN")
+airflow_expected_http_token = None if token == 'None' else token if configuration.has_option("rest_api_plugin", "REST_API_PLUGIN_EXPECTED_HTTP_TOKEN") else None
 
 # Using UTF-8 Encoding so that response messages don't have any characters in them that can't be handled
 os.environ['PYTHONIOENCODING'] = 'utf-8'
@@ -508,19 +509,24 @@ class REST_API_Response_Util():
         logging.warning("Returning a 500 Response Code with response '" + str(output) + "'")
         return REST_API_Response_Util._get_error_response(base_response, 500, output)
 
+# Creating Blueprint
+rest_api_bp = Blueprint(
+    "rest_api_bp",
+    __name__,
+    template_folder='templates',
+    static_folder='static',
+    static_url_path='/static/'
+)
 
-# REST_API View which extends the flask_admin BaseView
-class REST_API(BaseView):
 
-    # overrides BaseView method to show/hide the menu links dynamically
-    def is_visible(self):
-        return current_user.is_authenticated
-
-    # overrides BaseView method to check permission for the menu link
-    def is_accessible(self):
-        return current_user.is_authenticated
+# Creating a flask appbuilder BaseView
+class REST_APIAppBuilderBaseView(AppBuilderBaseView):
+    route_base = "/api/rest_plugin_api"
 
     # Checks a string object to see if it is none or empty so we can determine if an argument (passed to the rest api) is provided
+
+    template_folder = '/usr/local/airflow/plugins/templates/rest_api_plugin'
+
     @staticmethod
     def is_arg_not_provided(arg):
         return arg is None or arg == ""
@@ -530,13 +536,9 @@ class REST_API(BaseView):
     def get_dagbag():
         return DagBag()
 
-    @staticmethod
-    def get_argument(request, arg):
-        return request.args.get(arg) or request.form.get(arg)
-
-    # '/' Endpoint where the Admin page is which allows you to view the APIs available and trigger them
     @expose('/')
-    def index(self):
+    @has_access
+    def list(self):
         logging.info("REST_API.index() called")
 
         # get the information that we want to display on the page regarding the dags that are available
@@ -549,24 +551,24 @@ class REST_API(BaseView):
                 "is_active": (not orm_dag.is_paused) if orm_dag is not None else False
             })
 
-        return self.render("rest_api_plugin/index.html",
-                           dags=dags,
-                           airflow_webserver_base_url=airflow_webserver_base_url,
-                           rest_api_endpoint=rest_api_endpoint,
-                           apis_metadata=apis_metadata,
-                           airflow_version=airflow_version,
-                           rest_api_plugin_version=rest_api_plugin_version
-                           )
+        return self.render_template("index.html",
+                                    dags=dags,
+                                    airflow_webserver_base_url=airflow_webserver_base_url,
+                                    rest_api_endpoint=rest_api_endpoint,
+                                    apis_metadata=apis_metadata,
+                                    airflow_version=airflow_version,
+                                    rest_api_plugin_version=rest_api_plugin_version
+                                    )
 
     # '/api' REST Endpoint where API requests should all come in
-    @csrf.exempt  # Exempt the CSRF token
+    @has_access
     @expose('/api', methods=["GET", "POST"])
     @http_token_secure  # On each request,
     def api(self):
         base_response = REST_API_Response_Util.get_base_response()
 
         # Get the api that you want to execute
-        api = self.get_argument(request, 'api')
+        api = request.args.get('api')
         if api is not None:
             api = api.strip().lower()
         logging.info("REST_API.api() called (api: " + str(api) + ")")
@@ -590,7 +592,7 @@ class REST_API(BaseView):
         dag_id = None
         for argument in api_metadata["arguments"]:
             argument_name = argument["name"]
-            argument_value = self.get_argument(request, argument_name)
+            argument_value = request.args.get(argument_name)
             if argument["required"]:
                 if self.is_arg_not_provided(argument_value):
                     missing_required_arguments.append(argument_name)
@@ -640,7 +642,7 @@ class REST_API(BaseView):
         end_arguments = [0] * largest_end_argument_value
         for argument in api_metadata["arguments"]:
             argument_name = argument["name"]
-            argument_value = self.get_argument(request, argument_name)
+            argument_value = request.args.get(argument_name)
             logging.info("argument_name: " + str(argument_name) + ", argument_value: " + str(argument_value))
             if argument["form_input_type"] == "custom_input" and argument_value is None:
                 key = self.get_argument(request, 'cmd')
@@ -808,7 +810,7 @@ class REST_API(BaseView):
     def execute_cli_command_background_mode(airflow_cmd):
         logging.info("Executing CLI Command in the Background")
         exit_code = os.system(airflow_cmd)
-        output = REST_API.get_empty_process_output()
+        output = REST_APIAppBuilderBaseView.get_empty_process_output()
         output["stdout"] = "exit_code: " + str(exit_code)
         return output
 
@@ -818,7 +820,7 @@ class REST_API(BaseView):
         logging.info("Executing CLI Command")
         process = subprocess.Popen(airflow_cmd_split, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         process.wait()
-        return REST_API.collect_process_output(process)
+        return REST_APIAppBuilderBaseView.collect_process_output(process)
 
     # gets and empty object that has all the fields a CLI function would have in it.
     @staticmethod
@@ -832,7 +834,7 @@ class REST_API(BaseView):
     # Get the output of the CLI process and package it in a dict
     @staticmethod
     def collect_process_output(process):
-        output = REST_API.get_empty_process_output()
+        output = REST_APIAppBuilderBaseView.get_empty_process_output()
         if process.stderr is not None:
             output["stderr"] = ""
             for line in process.stderr.readlines():
@@ -867,25 +869,19 @@ class REST_API(BaseView):
             output["stdout"] = "\n".join(new_stdout_array)
         return output
 
-# Creating View to be used by Plugin
-rest_api_view = REST_API(category="Admin", name="REST API Plugin")
-
-# Creating Blueprint
-rest_api_bp = Blueprint(
-    "rest_api_bp",
-    __name__,
-    template_folder='templates',
-    static_folder='static',
-    static_url_path='/static/'
-)
+v_appbuilder_view = REST_APIAppBuilderBaseView()
+v_appbuilder_package = {"name" : "REST API Plugin",
+                        "category" : "Admin",
+                        "view": v_appbuilder_view}
 
 
 # Creating the REST_API_Plugin which extends the AirflowPlugin so its imported into Airflow
 class REST_API_Plugin(AirflowPlugin):
     name = "rest_api"
     operators = []
+    appbuilder_views = [v_appbuilder_package]
     flask_blueprints = [rest_api_bp]
     hooks = []
     executors = []
-    admin_views = [rest_api_view]
+    admin_views = []
     menu_links = []
