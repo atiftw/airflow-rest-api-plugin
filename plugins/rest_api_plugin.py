@@ -12,6 +12,7 @@ from airflow import configuration
 from airflow.models import DagBag, DagModel
 from airflow.plugins_manager import AirflowPlugin
 from airflow import configuration
+from airflow import settings
 from airflow.www.app import csrf
 
 from flask import Blueprint, request, jsonify
@@ -34,6 +35,7 @@ rest_api_plugin_version = __version__
 
 # Getting configurations from airflow.cfg file
 airflow_webserver_base_url = configuration.get('webserver', 'BASE_URL')
+plugins_folder = settings.PLUGINS_FOLDER
 airflow_base_log_folder = configuration.get('core', 'BASE_LOG_FOLDER')
 airflow_dags_folder = configuration.get('core', 'DAGS_FOLDER')
 log_loading = configuration.getboolean("rest_api_plugin", "LOG_LOADING") if configuration.has_option("rest_api_plugin", "LOG_LOADING") else False
@@ -525,7 +527,7 @@ class REST_APIAppBuilderBaseView(AppBuilderBaseView):
 
     # Checks a string object to see if it is none or empty so we can determine if an argument (passed to the rest api) is provided
 
-    template_folder = '/usr/local/airflow/plugins/templates/rest_api_plugin'
+    template_folder = plugins_folder + '/templates/rest_api_plugin'
 
     @staticmethod
     def is_arg_not_provided(arg):
