@@ -26,7 +26,7 @@ CLIs this REST API exposes are Defined here: http://airflow.incubator.apache.org
 
 # Location of the REST Endpoint
 # Note: Changing this will only effect where the messages are posted to on the web interface and will not change where the endpoint actually resides
-rest_api_endpoint = "/api/rest_plugin_api/api"
+rest_api_endpoint = "/rest_plugin_api/api"
 
 # Getting Versions and Global variables
 hostname = socket.gethostname()
@@ -523,7 +523,7 @@ rest_api_bp = Blueprint(
 
 # Creating a flask appbuilder BaseView
 class REST_APIAppBuilderBaseView(AppBuilderBaseView):
-    route_base = "/api/rest_plugin_api"
+    route_base = "/rest_plugin_api/"
 
     # Checks a string object to see if it is none or empty so we can determine if an argument (passed to the rest api) is provided
 
